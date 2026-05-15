@@ -83,3 +83,4 @@ def rijesi_gredu(nx, ny, nz, naziv):
 rijesi_gredu(10,  3, 2, "Gruba")
 rijesi_gredu(25,  5, 4, "Srednja")
 rijesi_gredu(50, 10, 8, "Fina")
+rijesi_gredu(100, 20, 16, "Vrlo fina")
