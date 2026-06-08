@@ -101,7 +101,7 @@ def modeliraj_gredu(L, H, nx, ny, tip_bc, opterecenje=-1e6):
 
     # --- Opterecenje na gornjoj ivici ---
     fdim       = domain.topology.dim - 1
-    facets_top = locate_entities_boundary(domain, fdim, gornja_ivica)
+    facets_top = np.sort(locate_entities_boundary(domain, fdim, gornja_ivica))
     facet_tags = mesh.meshtags(
         domain, fdim,
         facets_top, np.full(len(facets_top), 1, dtype=np.int32)
@@ -118,8 +118,7 @@ def modeliraj_gredu(L, H, nx, ny, tip_bc, opterecenje=-1e6):
     a      = inner(sigma(u), epsilon(v)) * dx
     L_form = inner(f_vol, v) * dx + inner(T, v) * ds_top
 
-    problem = LinearProblem(a, L_form, bcs=bcs,
-                            petsc_options_prefix="greda_",
+    problem = LinearProblem(a, L_form, petsc_options_prefix="greda_", bcs=bcs,
                             petsc_options={"ksp_type": "preonly", "pc_type": "lu"})
     uh = problem.solve()
 
@@ -175,3 +174,44 @@ print("""
     - Desna ivica:   u_y = 0
     * Simulira gredu izmedju dva paralelna zida.
 """)
+# ============================================================
+# IZVOZ ZA PARAVIEW (.xdmf)
+# ============================================================
+from dolfinx.io import XDMFFile
+from dolfinx.fem import Expression, Function, functionspace
+
+print("\nIzvoz .xdmf fajlova za ParaView...")
+
+for tip in ['prosta', 'konzola', 'slobodna_os']:
+    uh, domain, V, _ = modeliraj_gredu(L, H, nx, ny, tip)
+
+    # Interpolacija na Lagrange 1 (XDMF zahtjev)
+    V1  = functionspace(domain, ("Lagrange", 1, (domain.geometry.dim,)))
+    uh1 = Function(V1)
+    uh1.interpolate(uh)
+    uh1.name = "pomjeranja"
+
+    with XDMFFile(MPI.COMM_WORLD, f"greda_{tip}_pomjeranja.xdmf", "w") as xdmf:
+        xdmf.write_mesh(domain)
+        xdmf.write_function(uh1)
+
+    # Von Mises napon
+    def sigma_vm(u):
+        from ufl import sqrt
+        s = sigma(u) - (1/3) * tr(sigma(u)) * Identity(len(u))
+        return sqrt(3/2 * inner(s, s))
+
+    V_scalar = functionspace(domain, ("Lagrange", 1))
+    vm_expr  = Expression(sigma_vm(uh), V_scalar.element.interpolation_points)
+    vm_h     = Function(V_scalar)
+    vm_h.interpolate(vm_expr)
+    vm_h.name = "von_mises"
+
+    with XDMFFile(MPI.COMM_WORLD, f"greda_{tip}_naponi.xdmf", "w") as xdmf:
+        xdmf.write_mesh(domain)
+        xdmf.write_function(vm_h)
+
+    print(f"  Sacuvano: greda_{tip}_pomjeranja.xdmf")
+    print(f"  Sacuvano: greda_{tip}_naponi.xdmf")
+
+print("\nSvi fajlovi su spremni za ParaView!")
