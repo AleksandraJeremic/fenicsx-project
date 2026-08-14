@@ -8,7 +8,6 @@ Greda se modelira kao pravougaona oblast 5,00 x 0,50 m u ravni x-y.
 Debljina b = 0,30 m ne pojavljuje se u geometriji, vec se uzima u obzir
 pri preracunavanju opterecenja u povrsinsko (vidjeti nize).
 
-Pokretanje:  python3 greda.py
 """
 
 from mpi4py import MPI
