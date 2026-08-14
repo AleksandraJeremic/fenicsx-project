@@ -1,11 +1,10 @@
 # ============================================================
 # PRIMJER 3: Konvergencija rjesenja - TROUGAONI elementi
 #
-# Oslonci ostaju TACKASTI. Zbog singularnosti u tackastom osloncu
-# apsolutni ugib ne konvergira, pa pratimo i RELATIVNI ugib -
-# mjeren u odnosu na tezisnu osu iznad oslonaca.
+# Oslonci ostaju TACKASTI. Prati se i apsolutni i relativni ugib.
 # ============================================================
 
+import os
 from mpi4py import MPI
 import numpy as np
 import ufl
@@ -20,44 +19,40 @@ from dolfinx.mesh import create_rectangle, CellType, locate_entities_boundary, m
 # ============================================================
 # 1) ULAZNI PODACI
 # ============================================================
-L  = 5.0            # raspon [m]
-h  = 0.5            # visina presjeka [m]
-b  = 0.3            # sirina presjeka [m]
+L  = 5.0
+h  = 0.5
+b  = 0.3
 
-E  = 31.0e9         # modul elasticnosti [Pa]
-nu = 0.2            # Poissonov koeficijent
+E  = 31.0e9
+nu = 0.2
 
-q   = 20.0e3        # linijsko opterecenje [N/m]
-t_q = q / b         # povrsinski pritisak za 2D model [Pa]
+q   = 20.0e3
+t_q = q / b
 
-mu  = E / (2.0 * (1.0 + nu))     # Lame - plane stress
+mu  = E / (2.0 * (1.0 + nu))
 lam = E * nu / (1.0 - nu**2)
 
 # ============================================================
-# 2) REFERENTNA (ANALITICKA) RJESENJA
+# 2) REFERENTNA RJESENJA
 # ============================================================
-I_ef  = h**3 / 12.0              # moment inercije po jedinici debljine
-A_ef  = h                        # povrsina po jedinici debljine
-G     = E / (2.0 * (1.0 + nu))   # modul smicanja
-k_s   = 5.0 / 6.0                # koeficijent smicanja za pravougaoni presjek
+I_ef  = h**3 / 12.0
+A_ef  = h
+G     = E / (2.0 * (1.0 + nu))
+k_s   = 5.0 / 6.0
 
-w_EB   = 5.0 * t_q * L**4 / (384.0 * E * I_ef)     # Euler-Bernoulli (bez smicanja)
-w_smik = t_q * L**2 / (8.0 * k_s * G * A_ef)       # doprinos smicuce deformacije
-w_teor = w_EB + w_smik                              # Timosenko - prava referenca za 2D
+w_EB   = 5.0 * t_q * L**4 / (384.0 * E * I_ef)
+w_smik = t_q * L**2 / (8.0 * k_s * G * A_ef)
+w_teor = w_EB + w_smik
 
-M_teor   = t_q * L**2 / 8.0                         # maks. moment savijanja
-sxx_teor = M_teor * (h/2.0) / I_ef                  # napon u krajnjem vlaknu
+M_teor   = t_q * L**2 / 8.0
+sxx_teor = M_teor * (h/2.0) / I_ef
 
-# Niz mreza (odnos Nx:Ny = 10:1 daje kvadratne elemente)
 mreze = [(10, 1), (20, 2), (40, 4), (80, 8), (160, 16)]
 
 # ============================================================
 # 3) FUNKCIJA ZA JEDAN PRORACUN
 # ============================================================
 def rijesi(Nx, Ny):
-    """Vraca: broj celija, broj DOF-ova, apsolutni ugib,
-       relativni ugib i sigma_xx u donjem vlaknu na sredini raspona."""
-
     domen = create_rectangle(
         MPI.COMM_WORLD,
         [np.array([0.0, 0.0]), np.array([L, h])],
@@ -72,10 +67,10 @@ def rijesi(Nx, Ny):
     nula_x = fem.Function(Vx)
     nula_y = fem.Function(Vy)
 
-    def tacka_A(x):    # nepomicni zglob (0,0)
+    def tacka_A(x):
         return np.logical_and(np.isclose(x[0], 0.0), np.isclose(x[1], 0.0))
 
-    def tacka_B(x):    # pomicni zglob (L,0)
+    def tacka_B(x):
         return np.logical_and(np.isclose(x[0], L), np.isclose(x[1], 0.0))
 
     bcs = [
@@ -84,7 +79,7 @@ def rijesi(Nx, Ny):
         fem.dirichletbc(nula_y, fem.locate_dofs_geometrical((V.sub(1), Vy), tacka_B), V.sub(1)),
     ]
 
-    # --- opterecenje po gornjoj ivici ---
+    # --- opterecenje ---
     fdim = domen.topology.dim - 1
     facets_gore = np.sort(
         locate_entities_boundary(domen, fdim, lambda x: np.isclose(x[1], h))
@@ -114,12 +109,12 @@ def rijesi(Nx, Ny):
     rez = problem.solve()
     uh = rez[0] if isinstance(rez, tuple) else rez
 
-    # --- napon sigma_xx ---
+    # --- napon ---
     S1 = fem.functionspace(domen, ("Lagrange", 1))
     sxx = fem.Function(S1)
     sxx.interpolate(fem.Expression(sigma(uh)[0, 0], S1.element.interpolation_points))
 
-    # --- ocitavanje u tacki ---
+    # --- ocitavanje ---
     def vrijednost_u_tacki(funkcija, x, y):
         tacka = np.array([[x, y, 0.0]], dtype=np.float64)
         stablo = geometry.bb_tree(domen, domen.topology.dim)
@@ -131,27 +126,27 @@ def rijesi(Nx, Ny):
     n_cel = domen.topology.index_map(domen.topology.dim).size_local
     n_dof = V.dofmap.index_map.size_global * V.dofmap.index_map_bs
 
-    # --- KLJUCNA IZMJENA: apsolutni i relativni ugib ---
-    # Polje pomjeranja sadrzi logaritamsku singularnost iz tackastih
-    # oslonaca, koja se za ostatak grede ponasa kao pomjeranje krutog
-    # tijela nanize i zavisi od gustine mreze. Oduzimanjem prosjeka
-    # pomjeranja tezisne ose IZNAD oslonaca (tacke na fiksnom rastojanju
-    # h/2 od singularnosti) taj clan se ponistava.
-    w_sred = vrijednost_u_tacki(uh, L/2.0, h/2.0)[1]   # osa, sredina raspona
-    w_A    = vrijednost_u_tacki(uh, 0.0,   h/2.0)[1]   # osa, iznad lijevog oslonca
-    w_B    = vrijednost_u_tacki(uh, L,     h/2.0)[1]   # osa, iznad desnog oslonca
+    # --- apsolutni i relativni ugib ---
+    w_sred = vrijednost_u_tacki(uh, L/2.0, h/2.0)[1]
+    w_A    = vrijednost_u_tacki(uh, 0.0,   h/2.0)[1]
+    w_B    = vrijednost_u_tacki(uh, L,     h/2.0)[1]
 
-    w_aps = abs(w_sred)                                # divergira (logaritamski)
-    w_rel = abs(w_sred - 0.5 * (w_A + w_B))            # konvergira
+    w_aps = abs(w_sred)
+    w_rel = abs(w_sred - 0.5 * (w_A + w_B))
 
     sx = vrijednost_u_tacki(sxx, L/2.0, 0.0)[0]
 
-    return n_cel, n_dof, w_aps, w_rel, sx
+    # --- PROFIL sigma_xx PO VISINI PRESJEKA (na sredini raspona) ---
+    # Mali pomak od ivica (1e-9) da bb_tree sigurno nadje celiju
+    y_tacke = np.clip(np.linspace(0.0, h, 41), 1e-9, h - 1e-9)
+    profil = np.array([vrijednost_u_tacki(sxx, L/2.0, yy)[0] for yy in y_tacke])
+
+    return n_cel, n_dof, w_aps, w_rel, sx, y_tacke, profil
 
 # ============================================================
 # 4) PETLJA PO MREZAMA + TABELA
 # ============================================================
-broj_cel, ugibi_aps, ugibi_rel, naponi = [], [], [], []
+broj_cel, ugibi_aps, ugibi_rel, naponi, profili = [], [], [], [], []
 
 print("TROUGAONI ELEMENTI (Lagrange 2), tackasti oslonci\n")
 print(f"Euler-Bernoulli    : w = {w_EB*1000:.4f} mm")
@@ -166,7 +161,7 @@ print(f"{'Nx x Ny':>10} {'celija':>8} {'DOF':>8} "
 print("-" * 96)
 
 for (Nx, Ny) in mreze:
-    n_cel, n_dof, w_aps, w_rel, sx = rijesi(Nx, Ny)
+    n_cel, n_dof, w_aps, w_rel, sx, y_tacke, profil = rijesi(Nx, Ny)
 
     gr_aps = (w_aps - w_teor) / w_teor * 100.0
     gr_rel = (w_rel - w_teor) / w_teor * 100.0
@@ -176,6 +171,7 @@ for (Nx, Ny) in mreze:
     ugibi_aps.append(w_aps)
     ugibi_rel.append(w_rel)
     naponi.append(sx)
+    profili.append((f"{Nx}x{Ny}", y_tacke, profil))
 
     print(f"{Nx:>5} x{Ny:>3} {n_cel:>8} {n_dof:>8} "
           f"{w_aps*1000:>12.5f} {gr_aps:>9.3f} "
@@ -193,9 +189,9 @@ naponi    = np.array(naponi)
 greska_rel = np.abs(ugibi_rel - w_teor) / w_teor * 100.0
 greska_s   = np.abs(naponi - sxx_teor) / sxx_teor * 100.0
 
-fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+fig, ax = plt.subplots(1, 3, figsize=(18, 5))
 
-# Lijevo: apsolutni vs relativni ugib
+# --- (a) Konvergencija ugiba ---
 ax[0].plot(broj_cel, ugibi_aps * 1000, "o--", color="tab:gray",
            label="apsolutni ugib (divergira)")
 ax[0].plot(broj_cel, ugibi_rel * 1000, "o-", color="tab:blue",
@@ -205,19 +201,52 @@ ax[0].axhline(w_EB * 1000, color="k", ls=":", label="Euler-Bernoulli")
 ax[0].set_xscale("log")
 ax[0].set_xlabel("Broj konacnih elemenata")
 ax[0].set_ylabel("Ugib u sredini raspona [mm]")
-ax[0].set_title("Konvergencija ugiba - trougaoni elementi")
+ax[0].set_title("(a) Konvergencija ugiba")
 ax[0].grid(True, which="both", alpha=0.3)
-ax[0].legend()
+ax[0].legend(fontsize=8)
 
-# Desno: relativna greska (log-log)
-ax[1].loglog(broj_cel, greska_rel, "o-", label="greska relativnog ugiba")
-ax[1].loglog(broj_cel, greska_s, "s-", label="greska sigma_xx")
+# --- (b) Konvergencija napona ---
+# Tacno 2D rjesenje u donjem vlaknu: M*c/I + q/5
+sxx_2D = sxx_teor + t_q / 5.0
+ax[1].plot(broj_cel, naponi / 1e6, "s-", color="tab:orange", label="MKE")
+ax[1].axhline(sxx_teor / 1e6, color="k", ls=":",
+              label="tehnicka teorija (M*c/I)")
+ax[1].axhline(sxx_2D / 1e6, color="r", ls="--",
+              label="tacno 2D rjesenje")
+ax[1].set_xscale("log")
 ax[1].set_xlabel("Broj konacnih elemenata")
-ax[1].set_ylabel("Relativna greska [%]")
-ax[1].set_title("Greska u odnosu na referentno rjesenje")
+ax[1].set_ylabel("sigma_xx u donjem vlaknu [MPa]")
+ax[1].set_title("(b) Konvergencija napona")
 ax[1].grid(True, which="both", alpha=0.3)
-ax[1].legend()
+ax[1].legend(fontsize=8)
+
+# --- (c) Dijagram sigma_xx po visini presjeka ---
+for (naziv, y_t, prof) in profili:
+    ax[2].plot(prof / 1e6, y_t, "-", lw=1.2, label=f"mreza {naziv}")
+
+# teorijska linearna raspodjela: sigma = M*(h/2 - y)/I
+y_lin = np.linspace(0.0, h, 100)
+s_lin = M_teor * (h/2.0 - y_lin) / I_ef
+ax[2].plot(s_lin / 1e6, y_lin, "k--", lw=2, label="tehnicka teorija")
+
+ax[2].axhline(h/2.0, color="gray", ls=":", lw=1)     # tezisna osa
+ax[2].axvline(0.0, color="gray", ls=":", lw=1)
+ax[2].set_xlabel("sigma_xx [MPa]")
+ax[2].set_ylabel("y - visina presjeka [m]")
+ax[2].set_title("(c) Raspodjela sigma_xx po visini (x = L/2)")
+ax[2].grid(True, alpha=0.3)
+ax[2].legend(fontsize=8)
 
 plt.tight_layout()
-plt.savefig("primjer3_izmjena.png", dpi=150)
-print("\nGrafik sacuvan: primjer3_izmjena.png")
+
+# --- jedinstveno ime fajla: ne prepisujemo ni jedan postojeci (stari) grafik ---
+naziv_png = "primjer3_izmjena.png"
+if os.path.exists(naziv_png):
+    baza, _ = os.path.splitext(naziv_png)
+    brojac = 2
+    while os.path.exists(f"{baza}_{brojac}.png"):
+        brojac += 1
+    naziv_png = f"{baza}_{brojac}.png"
+
+plt.savefig(naziv_png, dpi=150)
+print(f"\nGrafik sacuvan: {naziv_png}")
