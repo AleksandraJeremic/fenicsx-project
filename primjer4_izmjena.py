@@ -4,6 +4,7 @@
 # Oslonci ostaju TACKASTI. Prati se i apsolutni i relativni ugib.
 # ============================================================
 
+import os
 from mpi4py import MPI
 import numpy as np
 import ufl
@@ -134,13 +135,17 @@ def rijesi(Nx, Ny):
     w_rel = abs(w_sred - 0.5 * (w_A + w_B))
 
     sx = vrijednost_u_tacki(sxx, L/2.0, 0.0)[0]
+# --- PROFIL sigma_xx PO VISINI PRESJEKA (na sredini raspona) ---
+    # Mali pomak od ivica (1e-9) da bb_tree sigurno nadje celiju
+    y_tacke = np.clip(np.linspace(0.0, h, 41), 1e-9, h - 1e-9)
+    profil = np.array([vrijednost_u_tacki(sxx, L/2.0, yy)[0] for yy in y_tacke])
 
-    return n_cel, n_dof, w_aps, w_rel, sx
+    return n_cel, n_dof, w_aps, w_rel, sx, y_tacke, profil
 
 # ============================================================
 # 4) PETLJA PO MREZAMA + TABELA
 # ============================================================
-broj_cel, ugibi_aps, ugibi_rel, naponi = [], [], [], []
+broj_cel, ugibi_aps, ugibi_rel, naponi, profili = [], [], [], [], []
 
 print("CETVOROUGAONI ELEMENTI (Lagrange 2), tackasti oslonci\n")
 print(f"Euler-Bernoulli    : w = {w_EB*1000:.4f} mm")
@@ -155,7 +160,7 @@ print(f"{'Nx x Ny':>10} {'celija':>8} {'DOF':>8} "
 print("-" * 96)
 
 for (Nx, Ny) in mreze:
-    n_cel, n_dof, w_aps, w_rel, sx = rijesi(Nx, Ny)
+    n_cel, n_dof, w_aps, w_rel, sx, y_tacke, profil = rijesi(Nx, Ny)
 
     gr_aps = (w_aps - w_teor) / w_teor * 100.0
     gr_rel = (w_rel - w_teor) / w_teor * 100.0
@@ -165,6 +170,7 @@ for (Nx, Ny) in mreze:
     ugibi_aps.append(w_aps)
     ugibi_rel.append(w_rel)
     naponi.append(sx)
+    profili.append((f"{Nx}x{Ny}", y_tacke, profil))
 
     print(f"{Nx:>5} x{Ny:>3} {n_cel:>8} {n_dof:>8} "
           f"{w_aps*1000:>12.5f} {gr_aps:>9.3f} "
@@ -182,31 +188,64 @@ naponi    = np.array(naponi)
 greska_rel = np.abs(ugibi_rel - w_teor) / w_teor * 100.0
 greska_s   = np.abs(naponi - sxx_teor) / sxx_teor * 100.0
 
-fig, ax = plt.subplots(1, 2, figsize=(13, 5))
+fig, ax = plt.subplots(1, 3, figsize=(18, 5))
 
+# --- (a) Konvergencija ugiba ---
 ax[0].plot(broj_cel, ugibi_aps * 1000, "o--", color="tab:gray",
            label="apsolutni ugib (divergira)")
-ax[0].plot(broj_cel, ugibi_rel * 1000, "o-", color="tab:green",
+ax[0].plot(broj_cel, ugibi_rel * 1000, "o-", color="tab:blue",
            label="relativni ugib (konvergira)")
 ax[0].axhline(w_teor * 1000, color="r", ls="--", label="Timosenko")
 ax[0].axhline(w_EB * 1000, color="k", ls=":", label="Euler-Bernoulli")
 ax[0].set_xscale("log")
 ax[0].set_xlabel("Broj konacnih elemenata")
 ax[0].set_ylabel("Ugib u sredini raspona [mm]")
-ax[0].set_title("Konvergencija ugiba - cetvorougaoni elementi")
+ax[0].set_title("(a) Konvergencija ugiba")
 ax[0].grid(True, which="both", alpha=0.3)
-ax[0].legend()
+ax[0].legend(fontsize=8)
 
-ax[1].loglog(broj_cel, greska_rel, "o-", color="tab:green",
-             label="greska relativnog ugiba")
-ax[1].loglog(broj_cel, greska_s, "s-", color="tab:orange",
-             label="greska sigma_xx")
+# --- (b) Konvergencija napona ---
+# Tacno 2D rjesenje u donjem vlaknu: M*c/I + q/5
+sxx_2D = sxx_teor + t_q / 5.0
+ax[1].plot(broj_cel, naponi / 1e6, "s-", color="tab:orange", label="MKE")
+ax[1].axhline(sxx_teor / 1e6, color="k", ls=":",
+              label="tehnicka teorija (M*c/I)")
+ax[1].axhline(sxx_2D / 1e6, color="r", ls="--",
+              label="tacno 2D rjesenje")
+ax[1].set_xscale("log")
 ax[1].set_xlabel("Broj konacnih elemenata")
-ax[1].set_ylabel("Relativna greska [%]")
-ax[1].set_title("Greska u odnosu na referentno rjesenje")
+ax[1].set_ylabel("sigma_xx u donjem vlaknu [MPa]")
+ax[1].set_title("(b) Konvergencija napona")
 ax[1].grid(True, which="both", alpha=0.3)
-ax[1].legend()
+ax[1].legend(fontsize=8)
+
+# --- (c) Dijagram sigma_xx po visini presjeka ---
+for (naziv, y_t, prof) in profili:
+    ax[2].plot(prof / 1e6, y_t, "-", lw=1.2, label=f"mreza {naziv}")
+
+# teorijska linearna raspodjela: sigma = M*(h/2 - y)/I
+y_lin = np.linspace(0.0, h, 100)
+s_lin = M_teor * (h/2.0 - y_lin) / I_ef
+ax[2].plot(s_lin / 1e6, y_lin, "k--", lw=2, label="tehnicka teorija")
+
+ax[2].axhline(h/2.0, color="gray", ls=":", lw=1)     # tezisna osa
+ax[2].axvline(0.0, color="gray", ls=":", lw=1)
+ax[2].set_xlabel("sigma_xx [MPa]")
+ax[2].set_ylabel("y - visina presjeka [m]")
+ax[2].set_title("(c) Raspodjela sigma_xx po visini (x = L/2)")
+ax[2].grid(True, alpha=0.3)
+ax[2].legend(fontsize=8)
 
 plt.tight_layout()
-plt.savefig("primjer4_izmjena.png", dpi=150)
-print("\nGrafik sacuvan: primjer4_izmjena.png")
+
+# --- jedinstveno ime fajla: ne prepisujemo ni jedan postojeci (stari) grafik ---
+naziv_png = "primjer4_izmjena.png"
+if os.path.exists(naziv_png):
+    baza, _ = os.path.splitext(naziv_png)
+    brojac = 2
+    while os.path.exists(f"{baza}_{brojac}.png"):
+        brojac += 1
+    naziv_png = f"{baza}_{brojac}.png"
+
+plt.savefig(naziv_png, dpi=150)
+print(f"\nGrafik sacuvan: {naziv_png}")
