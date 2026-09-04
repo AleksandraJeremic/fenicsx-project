@@ -236,7 +236,12 @@ for yy in np.linspace(0.0, h, 5):
     t_mke  = vrijednost_u_tacki(sxy, x_p, yc)[0]
     yb = yy - h/2.0
     t_teor = -V_p * ((h/2.0)**2 - yb**2) / (2.0 * I_ef)
-    print(f"{yy:8.3f} {t_mke/1e6:12.4f} {t_teor/1e6domen.geometry.dim,)))
+        print(f"{yy:8.3f} {t_mke/1e6:12.4f} {t_teor/1e6:15.4f}")
+
+# ============================================================
+# 9) IZVOZ ZA PARAVIEW
+# ============================================================
+V1 = fem.functionspace(domen, ("Lagrange", 1, (domen.geometry.dim,)))
 u1 = fem.Function(V1, name="pomjeranje")
 u1.interpolate(uh)
 
